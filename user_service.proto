@@ -1,0 +1,47 @@
+syntax = "proto3";
+
+package my_service;
+
+import "google/api/annotations.proto";
+import "google/protobuf/descriptor.proto";
+
+
+option go_package = "/protogen";
+
+extend google.protobuf.EnumValueOptions {
+    string user_status_value_option = 5000;
+}
+
+
+enum UserStatus {
+    USER_STATUS_UNKNOWN = 0; 
+    USER_STATUS_ACTIVE = 1 [(user_status_value_option) = "active"];
+    USER_STATUS_INACTIVE = 2 [(user_status_value_option) = "inactive"];
+}
+
+
+message User {
+    int32 id = 1;
+    string name = 2;
+    string email = 3;
+    UserStatus status = 4;
+}
+
+message GetUserRequest {
+    int32 user_id = 1;
+}
+
+message GetUserResponse {
+    User user = 1;
+}
+
+service UserService {
+    rpc GetUser(GetUserRequest) returns (GetUserResponse) {
+        option (google.api.http) = {
+            get: "/v1/users/{user_id}"
+        };
+    }
+}
+
+
+
