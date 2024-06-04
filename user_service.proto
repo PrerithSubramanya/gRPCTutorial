@@ -19,12 +19,19 @@ enum UserStatus {
     USER_STATUS_INACTIVE = 2 [(user_status_value_option) = "inactive"];
 }
 
+enum UserCurrency {
+    USER_CURRENCY_UNKNOWN = 0;
+    USER_CURRENCY_USD = 1 [(user_status_value_option) = "usd"];
+    USER_CURRENCY_EUR = 2 [(user_status_value_option) = "eur"];
+}
+
 
 message User {
     int32 id = 1;
     string name = 2;
     string email = 3;
     UserStatus status = 4;
+    UserCurrency currency = 5;
 }
 
 message GetUserRequest {
