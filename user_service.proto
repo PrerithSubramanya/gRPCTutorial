@@ -9,20 +9,26 @@ import "google/protobuf/descriptor.proto";
 option go_package = "/protogen";
 
 extend google.protobuf.EnumValueOptions {
-    string user_status_value_option = 5000;
+    string enum_trim = 5000;
 }
 
 
 enum UserStatus {
     USER_STATUS_UNKNOWN = 0; 
-    USER_STATUS_ACTIVE = 1 [(user_status_value_option) = "active"];
-    USER_STATUS_INACTIVE = 2 [(user_status_value_option) = "inactive"];
+    USER_STATUS_ACTIVE = 1 [(enum_trim) = "USER_STATUS_"];
+    USER_STATUS_INACTIVE = 2 [(enum_trim) = "USER_STATUS_"];
 }
 
 enum UserCurrency {
     USER_CURRENCY_UNKNOWN = 0;
-    USER_CURRENCY_USD = 1 [(user_status_value_option) = "usd"];
-    USER_CURRENCY_EUR = 2 [(user_status_value_option) = "eur"];
+    USER_CURRENCY_USD = 1 [(enum_trim) = "USER_CURRENCY_"];
+    USER_CURRENCY_EUR = 2 [(enum_trim) = "USER_CURRENCY_"];
+}
+
+enum UserCurrencyStatus {
+    USER_CURRENCY_STATUS_UNKNOWN = 0;
+    USER_CURRENCY_STATUS_ACTIVE = 1 [(enum_trim) = "USER_CURRENCY_STATUS"];
+    USER_CURRENCY_STATUS_INACTIVE = 2 [(enum_trim) = "USER_CURRENCY_STATUS"];
 }
 
 
@@ -32,11 +38,17 @@ message User {
     string email = 3;
     UserStatus status = 4;
     UserCurrency currency = 5;
+    UserCurrencyStatus currency_status = 6;
 }
 
 message GetUserRequest {
     int32 user_id = 1;
 }
+
+message CreateUserRequest {
+    string name = 1;
+}
+
 
 message GetUserResponse {
     User user = 1;
@@ -48,7 +60,13 @@ service UserService {
             get: "/v1/users/{user_id}"
         };
     }
-}
 
+    rpc CreateUser (User) returns (GetUserResponse) {
+        option (google.api.http) = {
+            post: "/v1/users/create_users"
+            body: "*"
+        };
+    }
+}
 
 

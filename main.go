@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strings"
 
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"google.golang.org/grpc"
@@ -19,89 +20,160 @@ import (
 	pb "gRPCSerialization/protogen"
 )
 
-type customMarshaler struct {
-	*runtime.JSONPb
+var userList []pb.User
+
+type customEnumMarshaler struct {
+	runtime.JSONPb
 }
 
-func (m *customMarshaler) Marshal(v interface{}) ([]byte, error) {
-	// Marshal the response to JSON using the default marshaler
-	jsonBytes, err := m.JSONPb.Marshal(v)
+func (m *customEnumMarshaler) Marshal(v interface{}) ([]byte, error) {
+	pb, ok := v.(proto.Message)
+	if !ok {
+		return nil, fmt.Errorf("expected proto.Message but got %T", v)
+	}
+
+	// fmt.Printf("This is Marshalpb %s", pb)
+
+	jsonBytes, err := protojson.MarshalOptions{EmitUnpopulated: true}.Marshal(pb)
 	if err != nil {
 		return nil, err
 	}
 
-	// Unmarshal the JSON into a map
-	var jsonMap map[string]interface{}
-	err = json.Unmarshal(jsonBytes, &jsonMap)
-	if err != nil {
+	var jsonData map[string]interface{}
+	if err := json.Unmarshal(jsonBytes, &jsonData); err != nil {
 		return nil, err
 	}
 
-	// Modify the 'status' field to include both the enum value and descriptor
-	if user, ok := jsonMap["user"].(map[string]interface{}); ok {
-		if status, ok := user["status"].(string); ok {
-			enumValue := pb.UserStatus(pb.UserStatus_value[status])
-			delete(user, "status")
-			user["status_value"] = getUserStatusDescription(enumValue)
+	convertEnumsToCustomOptions(jsonData, pb.ProtoReflect())
+
+	return json.Marshal(jsonData)
+}
+
+func (m *customEnumMarshaler) Unmarshal(data []byte, v interface{}) error {
+	fmt.Printf("This is Unmarshalpb %s", v.(string))
+	pb, ok := v.(proto.Message)
+	if !ok {
+		return fmt.Errorf("expected proto.Message but got %T", v)
+	}
+
+	// Unmarshal JSON data into proto message
+	if err := protojson.Unmarshal(data, pb); err != nil {
+		return err
+	}
+
+	// Convert custom options to enum values
+	convertCustomOptionsToEnums(pb.ProtoReflect())
+
+	return nil
+}
+
+func convertCustomOptionsToEnums(pb protoreflect.Message) {
+	fields := pb.Descriptor().Fields()
+	for i := 0; i < fields.Len(); i++ {
+		field := fields.Get(i)
+		if field.Kind() == protoreflect.EnumKind {
+			enumDesc := field.Enum()
+			value := pb.Get(field).Enum()
+
+			customOption, err := getCustomOptionForEnumValue(enumDesc, protoreflect.EnumNumber(value))
+			if err == nil {
+				enumValue := enumDesc.Values().ByName(protoreflect.Name(customOption))
+				pb.Set(field, protoreflect.ValueOfEnum(enumValue.Number()))
+			}
+		} else if field.Kind() == protoreflect.MessageKind {
+			nestedMsg := pb.Mutable(field).Message()
+			convertCustomOptionsToEnums(nestedMsg)
+		}
+	}
+}
+
+func getCustomOptionForEnumValue(enumDesc protoreflect.EnumDescriptor, value protoreflect.EnumNumber) (string, error) {
+	for i := 0; i < enumDesc.Values().Len(); i++ {
+		val := enumDesc.Values().Get(i)
+		opts := val.Options().(*descriptorpb.EnumValueOptions)
+		ext := proto.GetExtension(opts, pb.E_EnumTrim)
+
+		if ext.(string) == fmt.Sprintf("%d", value) {
+			return string(val.Name()), nil
+		}
+	}
+	return "", fmt.Errorf("enum value %d not found for enum %s", value, enumDesc.FullName())
+}
+
+func convertEnumsToCustomOptions(jsonData map[string]interface{}, pb protoreflect.Message) {
+	fields := pb.Descriptor().Fields()
+	for i := 0; i < fields.Len(); i++ {
+		field := fields.Get(i)
+		if field.Kind() == protoreflect.EnumKind {
+			if value, exists := jsonData[field.JSONName()]; exists {
+				if enumValue, ok := value.(string); ok {
+					customValue, err := getCustomOptionForEnum(field.Enum(), enumValue)
+					if err == nil {
+						jsonData[field.JSONName()] = strings.TrimPrefix(enumValue, customValue)
+					}
+				}
+			}
+		} else if field.Kind() == protoreflect.MessageKind {
+			if nestedValue, exists := jsonData[field.JSONName()]; exists {
+				if nestedMap, ok := nestedValue.(map[string]interface{}); ok {
+					convertEnumsToCustomOptions(nestedMap, pb.Get(field).Message())
+				}
+			}
+		}
+	}
+}
+
+func getCustomOptionForEnum(enumDesc protoreflect.EnumDescriptor, value string) (string, error) {
+	var enumValueDesc protoreflect.EnumValueDescriptor
+	for i := 0; i < enumDesc.Values().Len(); i++ {
+		val := enumDesc.Values().Get(i)
+		if val.Name() == protoreflect.Name(value) {
+			enumValueDesc = val
+			break
 		}
 	}
 
-	// Marshal the modified JSON map back to bytes
-	return json.Marshal(jsonMap)
-}
-
-func getUserStatusDescription(status pb.UserStatus) string {
-	statusValDesc := status.Descriptor().Values().ByNumber(protoreflect.EnumNumber(status))
-	options := statusValDesc.Options().(*descriptorpb.EnumValueOptions)
-	ext := proto.GetExtension(options, pb.E_UserStatusValueOption)
-	if str, ok := ext.(string); ok {
-		return str
+	if enumValueDesc == nil {
+		return "", fmt.Errorf("enum value %s not found for enum %s", value, enumDesc.FullName())
 	}
 
-	return "unknown"
+	opts := enumValueDesc.Options().(*descriptorpb.EnumValueOptions)
+	ext := proto.GetExtension(opts, pb.E_EnumTrim)
+
+	return ext.(string), nil
 }
 
-func getStatusFromString(description string) pb.UserStatus {
-	enumType := pb.UserStatus(0).Descriptor()
-	for i := 0; i < enumType.Values().Len(); i++ {
-		val := enumType.Values().Get(i)
-		options := val.Options().(*descriptorpb.EnumValueOptions)
-		ext := proto.GetExtension(options, pb.E_UserStatusValueOption)
-		if ext.(string) == description {
-			return pb.UserStatus(val.Number())
-		}
-
-	}
-
-	return pb.UserStatus_USER_STATUS_UNKNOWN
-}
-
-// Iterate through all enum values in UserStatu
 type userServiceServer struct {
 	pb.UnimplementedUserServiceServer
 }
 
 func (s *userServiceServer) GetUser(ctx context.Context, req *pb.GetUserRequest) (*pb.GetUserResponse, error) {
 	// Implement the GetUser logic here
-	userID := req.UserId
+	userID := int(req.UserId)
 
-	// Simulate retrieving the user from a database
-	user := &pb.User{
-		Id:     userID,
-		Name:   "John Doe",
-		Email:  "john@example.com",
-		Status: pb.UserStatus_USER_STATUS_ACTIVE,
+	// fmt.Printf("Getting user %d", userID)
+	if userID < 0 {
+		return nil, fmt.Errorf("user not found")
 	}
+	for i := 0; i < len(userList); i++ {
+		if int(userList[i].Id) == userID {
+			return &pb.GetUserResponse{User: &userList[i]}, nil
+		}
+	}
+	return nil, fmt.Errorf("user not found")
+}
 
-	return &pb.GetUserResponse{User: user}, nil
+func (s *userServiceServer) CreateUser(ctx context.Context, req *pb.User) (*pb.GetUserResponse, error) {
+	newUser := proto.Clone(req).(*pb.User)
+
+	// fmt.Println("Creating new user: ", req)
+
+	userList = append(userList, *newUser)
+
+	return &pb.GetUserResponse{User: newUser}, nil
 }
 
 func main() {
-
-	status := pb.UserStatus_USER_STATUS_ACTIVE // Assuming this is from your generated code
-	description := getUserStatusDescription(status)
-	convStatus := getStatusFromString(description)
-	fmt.Println("Status description:", convStatus)
 
 	lis, err := net.Listen("tcp", ":50051")
 	if err != nil {
@@ -125,17 +197,7 @@ func main() {
 	defer conn.Close()
 
 	mux := runtime.NewServeMux(
-		runtime.WithMarshalerOption(runtime.MIMEWildcard, &customMarshaler{
-			JSONPb: &runtime.JSONPb{
-				MarshalOptions: protojson.MarshalOptions{
-					UseProtoNames:   true,
-					EmitUnpopulated: true,
-				},
-				UnmarshalOptions: protojson.UnmarshalOptions{
-					DiscardUnknown: true,
-				},
-			},
-		}),
+		runtime.WithMarshalerOption(runtime.MIMEWildcard, &customEnumMarshaler{}),
 	)
 	err = pb.RegisterUserServiceHandler(context.Background(), mux, conn)
 	if err != nil {
